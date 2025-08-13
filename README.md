@@ -1,4 +1,4 @@
-![TrayTranslate](.\static\traytranslate.png)
+![TrayTranslate](static/traytranslate.png)
 
 A simple tool that leverages the OpenAI API to translate text on the screen when a shortcut is pressed.
 
