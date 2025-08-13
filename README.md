@@ -8,7 +8,7 @@ The shortcut in this case is hardcoded as **Shift + Ctrl + PrtScr**. The prompt,
 
 If you just want to run it, jump to section *"Running"*.
 
-To use this app, first install Python 3.11, populate the `.env` file with your OpenAI API key. 
+To use this app, first install Python 3.11. Then, populate the `.env` file with your OpenAI API key. 
 Refer to `.env.example` for a reference.
 
 After that, enable the virtual environment and set everything up:
