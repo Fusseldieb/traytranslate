@@ -10,9 +10,10 @@ After that, enable the venv:
 
 ```
 # Windows (PowerShell)
-.venv\Scripts\Activate.ps1
+py -3.11 -m venv .venv # Create the environment if you haven't already
+.venv\Scripts\Activate.ps1 # Activate it
 ```
 
 And then you can either run the app directly using: `python .\tray_translate_picker.py`
 
-Or build into a standalone .exe with: `pyinstaller --onefile --noconsole  .\tray_translate_picker.py`
+Or build it into a standalone .exe with: `pyinstaller --onefile --noconsole  .\tray_translate_picker.py`
