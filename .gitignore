@@ -1,0 +1,24 @@
+# Python virtual environment
+.venv/
+env/
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build and distribution directories
+build/
+dist/
+
+# PyInstaller spec file
+*.spec
+
+# Environment variables
+.env
+
+# IDE specific files
+.vscode/
+.idea/
