@@ -30,7 +30,7 @@ python .\tray_translate_picker.py
 Or build it into a standalone `.exe` with:
 
 ```powershell
-pyinstaller --onefile --noconsole .\tray_translate_picker.py
+pyinstaller --onefile --noconsole --add-data "prompt.md;." tray_translate_picker.py
 ```
 
 # Running
