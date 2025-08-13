@@ -37,4 +37,4 @@ pyinstaller --onefile --noconsole --add-data "prompt.md;." tray_translate_picker
 
 # Running
 
-If you download the [prebuilt release](https://github.com/Fusseldieb/traytranslate/releases/) and/or run the standalone executable, make sure to have the `.env` **in the same directory**. If you use the prebuilt release, note that `prompt.md` gets ignored, and a "Image to English" prompt will be used, unless the prompt is explicitly bundled/included with pyinstaller.
+If you download the [prebuilt release](https://github.com/Fusseldieb/traytranslate/releases/) and/or run the standalone executable, make sure to have the `.env` **in the same directory**. If you use the prebuilt release, note that `prompt.md` gets ignored, and a fallback *"Image-to-English"* prompt will be used, unless the prompt is explicitly bundled/included with pyinstaller.
