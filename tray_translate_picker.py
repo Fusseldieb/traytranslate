@@ -4,6 +4,7 @@ import base64
 import ctypes
 import time
 import markdown
+from pathlib import Path
 
 from openai import OpenAI
 
@@ -37,13 +38,19 @@ RegisterHotKey.restype    = wintypes.BOOL
 UnregisterHotKey.argtypes = [wintypes.HWND, wintypes.INT]
 UnregisterHotKey.restype  = wintypes.BOOL
 
-PROMPT_TEXT_MD = (
-    "Please translate the following image into Brazilian Portuguese. "
-    "Output in Markdown, preserving the document's structure where helpful. "
-    "Do not use any code blocks around the text. "
-    "Do not add any commentary before or after; include ONLY the translation. "
-    "The user providing the image is your friend, so a friendly tone is OK if appropriate."
-)
+PROMPT_PATH = Path(__file__).with_name("prompt.md")
+
+if PROMPT_PATH.exists():
+    with PROMPT_PATH.open("r", encoding="utf-8") as f:
+        PROMPT_TEXT_MD = f.read().strip()
+else:
+    PROMPT_TEXT_MD = (
+        "Translate the text in the image to English."
+        "Output in Markdown, preserving the document's structure where helpful."
+        "Do not use any code blocks around the text."
+        "Do not add any commentary before or after; include ONLY the translation."
+        "The user providing the image is your friend, so a friendly tone is OK if appropriate."
+    )
 
 OPENAI_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")  # or gpt-4o-mini
 
