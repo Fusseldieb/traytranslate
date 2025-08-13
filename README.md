@@ -4,7 +4,12 @@ A simple tool that leverages the OpenAI API to translate text on the screen when
 
 The shortcut in this case is hardcoded as **Shift + Ctrl + PrtScr**. The prompt, however, is customizeable and is in `prompt.md`.
 
-To use this app, first populate the `.env` file with your OpenAI API key. Refer to `.env.example` for a reference.
+# Setting everything up
+
+If you just want to run it, jump to section *"Running"*.
+
+To use this app, first install Python 3.11, populate the `.env` file with your OpenAI API key. 
+Refer to `.env.example` for a reference.
 
 After that, enable the virtual environment and set everything up:
 
@@ -28,4 +33,6 @@ Or build it into a standalone `.exe` with:
 pyinstaller --onefile --noconsole .\tray_translate_picker.py
 ```
 
-If you download the prebuilt release or run the standalone executable, make sure to have the `.env` **in the same directory**.
+# Running
+
+If you download the [prebuilt release](https://github.com/Fusseldieb/traytranslate/releases/) and/or run the standalone executable, make sure to have the `.env` **in the same directory**.
