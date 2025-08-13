@@ -1,37 +1,33 @@
 import os
 import sys
 import base64
-import threading
 import ctypes
 import time
 import markdown
 
-from openai import OpenAI, APIError, APIConnectionError, APIStatusError
+from openai import OpenAI
 
 from PySide6.QtCore import (
-    Qt, QRect, QPoint, QBuffer, QByteArray, QIODevice, Signal, QObject, QTimer, QSize, QThread, Slot, QAbstractNativeEventFilter
+    Qt, QRect, QPoint, QBuffer, QByteArray, QIODevice, Signal, QObject, QTimer, QThread, Slot, QAbstractNativeEventFilter
 )
 from PySide6.QtGui import (
-    QGuiApplication, QIcon, QPainter, QColor, QPen, QCursor, QAction, QKeySequence, QShortcut, QTextCursor, QPixmap
+    QGuiApplication, QPainter, QColor, QPen, QCursor, QKeySequence, QShortcut, QPixmap, QAction
 )
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QSystemTrayIcon, QMenu, QLabel, QTextEdit, QStyle, QTextBrowser
+    QApplication, QWidget, QSystemTrayIcon, QMenu, QLabel, QStyle, QTextBrowser
 )
 
 from dotenv import load_dotenv
-
 from ctypes import wintypes
 
 load_dotenv()
 
 # --- Windows global hotkey setup ---
-WM_HOTKEY      = 0x0312
-MOD_ALT        = 0x0001
-MOD_CONTROL    = 0x0002
-MOD_SHIFT      = 0x0004
-MOD_WIN        = 0x0008
-VK_SNAPSHOT    = 0x2C   # Print Screen
-HOTKEY_ID      = 1      # any non-zero id
+WM_HOTKEY   = 0x0312
+MOD_ALT     = 0x0001
+MOD_CONTROL = 0x0002
+VK_SNAPSHOT = 0x2C   # Print Screen
+HOTKEY_ID   = 1      # any non-zero id
 
 user32 = ctypes.windll.user32
 RegisterHotKey   = user32.RegisterHotKey
@@ -43,45 +39,48 @@ UnregisterHotKey.restype  = wintypes.BOOL
 
 PROMPT_TEXT_MD = (
     "Please translate the following image into Brazilian Portuguese. "
-    "Output in Markdown, preserving the document\'s structure where helpful. Do not any code blocks around the text."
+    "Output in Markdown, preserving the document's structure where helpful. "
+    "Do not use any code blocks around the text. "
     "Do not add any commentary before or after; include ONLY the translation. "
-    "The user that is providing you the image is your friend, so feel free to use a more personal tone, if appropriate to the context."
+    "The user providing the image is your friend, so a friendly tone is OK if appropriate."
 )
 
-OPENAI_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")  # change to gpt-4o-mini if you prefer
+OPENAI_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")  # or gpt-4o-mini
+
 
 class WinHotkeyFilter(QAbstractNativeEventFilter):
+    """Listens for the global Windows hotkey and triggers a callback on the Qt thread."""
     def __init__(self, on_hotkey):
         super().__init__()
         self.on_hotkey = on_hotkey
 
     def nativeEventFilter(self, eventType, message):
-        # eventType is typically 'windows_generic_MSG' on PySide6
         if eventType.startsWith(b'windows_'):
             msg = ctypes.wintypes.MSG.from_address(int(message))
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                # invoke on Qt thread asap
                 QTimer.singleShot(0, self.on_hotkey)
         return False, 0
 
+
 class TranslatorWorker(QObject):
-    chunk = Signal(str)     # partial text
+    chunk = Signal(str)     # partial streamed text
     done = Signal()         # finished without error
-    error = Signal(str)
+    error = Signal(str)     # error message
 
     @Slot(bytes)
     def run(self, png_bytes: bytes):
         try:
             client = OpenAI()
             b64 = base64.b64encode(png_bytes).decode("utf-8")
+
             with client.responses.stream(
                 model=OPENAI_MODEL,
                 input=[{
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": PROMPT_TEXT_MD},
-                        {"type": "input_image", "image_url": f"data:image/png;base64,{b64}"}
-                    ]
+                        {"type": "input_image", "image_url": f"data:image/png;base64,{b64}"},
+                    ],
                 }],
                 timeout=60,
                 temperature=0.6,
@@ -89,12 +88,12 @@ class TranslatorWorker(QObject):
                 for event in stream:
                     if event.type == "response.output_text.delta":
                         self.chunk.emit(event.delta)
-                        # gentle throttle so UI can breathe
-                        time.sleep(0.05)
-                _final = stream.get_final_response()
+                        time.sleep(0.04)  # gentle throttle so UI keeps up
+                _ = stream.get_final_response()  # ensures completion
             self.done.emit()
         except Exception as e:
             self.error.emit(f"Unexpected error: {e}")
+
 
 class Overlay(QWidget):
     requestClose = Signal()
@@ -110,33 +109,30 @@ class Overlay(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(QCursor(Qt.CrossCursor))
         self.setMouseTracking(True)
-        self._frozen_pm = None  # holds the stitched, frozen desktop
-        self._status_rect = None
+
+        self._frozen_pm: QPixmap | None = None
+        self._status_rect: QRect | None = None
         self.state = self.STATE_IDLE
         self.dragging = False
         self.start_pt = QPoint()
         self.end_pt = QPoint()
         self.selection = QRect()
+        self._preview_pixmap: QPixmap | None = None
+        self._md_buffer: list[str] = []
 
-        # Buffer for streamed Markdown/plaintext
-        self._md_buffer = ""
-
-        # Instruction label (top)
+        # Instruction label (top-left)
         self.instruction = QLabel(self)
         self.instruction.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.instruction.setStyleSheet(
-            "color: white; font-size: 16px; background: rgba(0,0,0,0); padding: 8px 12px; "
-            "border-radius: 8px;"
+            "color: white; font-size: 16px; background: rgba(0,0,0,0); padding: 8px 12px; border-radius: 8px;"
         )
         self.instruction.setText("Drag to select. Press Enter to translate. Esc to cancel.")
-        self.instruction.adjustSize()
         self.instruction.hide()
 
         # Center label while waiting
         self.waiting = QLabel("Translating...", self)
         self.waiting.setStyleSheet(
-            "color: white; font-size: 20px; background: rgba(0,0,0,0); padding: 14px 20px; "
-            "border-radius: 12px;"
+            "color: white; font-size: 20px; background: rgba(0,0,0,0); padding: 14px 20px; border-radius: 12px;"
         )
         self.waiting.setAlignment(Qt.AlignCenter)
         self.waiting.hide()
@@ -145,52 +141,47 @@ class Overlay(QWidget):
         self.preview = QLabel(self)
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setStyleSheet(
-            "background: rgba(0,0,0,0); padding: 8px; border-radius: 12px; "
-            "border: 1px solid rgba(255,255,255,120);"
+            "background: rgba(0,0,0,0); padding: 8px; border-radius: 12px; border: 1px solid rgba(255,255,255,120);"
         )
         self.preview.hide()
-        self._preview_pixmap = None
 
         # Result view (Markdown rendered)
         self.result = QTextBrowser(self)
         self.result.setOpenExternalLinks(True)
         self.result.setStyleSheet(
-            "QTextBrowser { color: white; background: rgba(0,0,0,150); font-size: 20px; "
-            "padding: 16px; border-radius: 16px; }"
+            "QTextBrowser { color: white; background: rgba(0,0,0,150); font-size: 20px; padding: 16px; border-radius: 16px; }"
         )
+        self.result.setFocusPolicy(Qt.NoFocus)
         self.result.hide()
-        self._md_buffer = []  # NEW: buffer for streamed Markdown
 
         # Cover full virtual desktop
         vg = QGuiApplication.primaryScreen().virtualGeometry()
         self.setGeometry(vg)
 
-        # Let Esc/Enter work regardless of which child has focus.
+        # Shortcuts (Esc & Enter)
         self._esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self._esc.setContext(Qt.ApplicationShortcut)
         self._esc.activated.connect(self.finish)
 
-        self._enter = QShortcut(QKeySequence(Qt.Key_Return), self)
-        self._enter.setContext(Qt.ApplicationShortcut)
-        self._enter.activated.connect(lambda: self._maybe_capture())
-        self._enter2 = QShortcut(QKeySequence(Qt.Key_Enter), self)
-        self._enter2.setContext(Qt.ApplicationShortcut)
-        self._enter2.activated.connect(lambda: self._maybe_capture())
+        for key in (Qt.Key_Return, Qt.Key_Enter):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ApplicationShortcut)
+            sc.activated.connect(self._maybe_capture)
 
-        # Optional: keep result box from stealing focus
-        self.result.setFocusPolicy(Qt.NoFocus)
-
-    def _maybe_capture(self):
-        if self.state == self.STATE_SELECTING and not self.selection.isNull():
-            self._capture_and_translate()
+    # ---- Small helpers ----
+    def _focus_overlay(self):
+        self.raise_()
+        self.activateWindow()
+        self.setFocus(Qt.ActiveWindowFocusReason)
+        self.grabKeyboard()
 
     def _primary_geom(self):
         return QGuiApplication.primaryScreen().geometry()
-    
+
     def _snapshot_virtual_desktop(self):
         """
         Capture all screens and stitch them into a single QPixmap matching
-        QGuiApplication.primaryScreen().virtualGeometry().
+        the virtual desktop geometry.
         """
         try:
             vg = QGuiApplication.primaryScreen().virtualGeometry()
@@ -204,65 +195,47 @@ class Overlay(QWidget):
             p = QPainter(canvas)
             for screen in QGuiApplication.screens():
                 sg = screen.geometry()
-                # grabWindow(0) captures the whole screen in screen-local coords
-                pm = screen.grabWindow(0)
-                # place it into the big canvas at (sg.x - vg.x, sg.y - vg.y)
+                pm = screen.grabWindow(0)  # whole screen
                 p.drawPixmap(sg.topLeft() - vg.topLeft(), pm)
             p.end()
 
             self._frozen_pm = canvas
         except Exception:
             self._frozen_pm = None
-    
+
+    # ---- Streaming UI updates ----
     def _on_worker_chunk(self, piece: str):
         if self.state != self.STATE_RESULT:
-            if self.waiting.isVisible():
-                # Use same vertical position but make it wider
-                old_rect = self.waiting.geometry()
-                wider_w = min(int(self.width() * 0.7), 800)  # 70% of overlay width, capped at 800px
-                wider_x = max(0, old_rect.center().x() - wider_w // 2)
-                wider_h = min(int(self.height() * 0.7), 600)   # Add height control here
-                self._status_rect = QRect(wider_x, old_rect.y(), wider_w, wider_h)
-
-                self._status_rect = QRect(wider_x, old_rect.y(), wider_w, wider_h)
-            else:
-                self._status_rect = None
-
+            # Switch to result view, keep preview visible
             self.state = self.STATE_RESULT
             self.waiting.hide()
-            # Keep preview visible
             self.result.clear()
             self.result.show()
 
-            # Apply our wider geometry immediately
-            if self._status_rect is not None:
+            # Use a wider geometry if we already laid out the waiting box
+            if self._status_rect:
                 self.result.setGeometry(self._status_rect)
 
-            self.raise_()
-            self.activateWindow()
-            self.setFocus(Qt.ActiveWindowFocusReason)
-            self.grabKeyboard()
+            self._focus_overlay()
             self.layoutFloatingWidgets()
-
 
         # Buffer streamed text as Markdown
         self._md_buffer.append(piece)
         md_text = "".join(self._md_buffer)
 
-        # Convert Markdown -> HTML (supports fenced code & tables)
+        # Convert Markdown -> HTML
         html_body = markdown.markdown(
             md_text,
             extensions=["fenced_code", "tables", "sane_lists", "codehilite"]
         )
 
-        # Wrap with dark-friendly styling so text stays readable
         themed_html = f"""
         <html>
         <head>
         <meta charset="utf-8">
         <style>
             body {{
-            color: #ffffff; background: transparent; font-size: 18px; text-align: center;
+                color: #ffffff; background: transparent; font-size: 18px; text-align: center;
             }}
             a {{ color: #9cd3ff; }}
             code, pre {{ background: rgba(255,255,255,0.08); border-radius: 6px; padding: 0.2em 0.4em; }}
@@ -277,49 +250,43 @@ class Overlay(QWidget):
         </html>
         """
 
-        # Updating the full HTML each chunk keeps formatting correct as the text grows
         self.result.setHtml(themed_html)
         QApplication.processEvents()
-
 
     def _on_worker_done(self):
         pass
 
     def _on_worker_error(self, err: str):
         self.state = self.STATE_RESULT
-        self._md_buffer = []
+        self._md_buffer.clear()
         self.waiting.hide()
         self.preview.hide()
         self.result.setMarkdown(f"**Error:** {err}")
         self.result.show()
-        self.raise_()
-        self.activateWindow()
-        self.setFocus(Qt.ActiveWindowFocusReason)
-        self.grabKeyboard()
+        self._focus_overlay()
         self.layoutFloatingWidgets()
 
+    # ---- Public controls ----
     def start(self):
-        # Take a frozen snapshot before showing overlay so nothing moves
         self._snapshot_virtual_desktop()
 
         self.state = self.STATE_SELECTING
         self.dragging = False
         self.selection = QRect()
         self._status_rect = None
+
         pg = self._primary_geom()
         top_left_local = self.mapFromGlobal(QPoint(pg.x() + 20, pg.y() + 20))
         self.instruction.move(top_left_local)
         self.instruction.show()
+
         self.waiting.hide()
         self.preview.hide()
         self.result.hide()
+
         self.show()
-        self.raise_()
-        self.activateWindow()
-        self.setFocus(Qt.ActiveWindowFocusReason)
-        self.grabKeyboard()
-        self.layoutFloatingWidgets()
-        self._md_buffer = []
+        self._focus_overlay()
+        self._md_buffer.clear()
         self.update()
 
     def finish(self):
@@ -330,37 +297,33 @@ class Overlay(QWidget):
         self._status_rect = None
         self.dragging = False
         self.selection = QRect()
+        self._preview_pixmap = None
+
         self.instruction.hide()
         self.waiting.hide()
         self.preview.hide()
-        self._preview_pixmap = None
         self.result.hide()
         self.requestClose.emit()
 
     # ---- Input handling ----
+    def _maybe_capture(self):
+        if self.state == self.STATE_SELECTING and not self.selection.isNull():
+            self._capture_and_translate()
+
     def keyPressEvent(self, event):
-        k = event.key()
-        if k == Qt.Key_Escape:
+        if event.key() == Qt.Key_Escape:
             self.finish()
-            return
-        if k in (Qt.Key_Return, Qt.Key_Enter):
-            if self.state == self.STATE_SELECTING and not self.selection.isNull():
-                self._capture_and_translate()
-            elif self.state in (self.STATE_RESULT, self.STATE_WAITING):
-                pass
             return
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
-        if self.state != self.STATE_SELECTING:
+        if self.state != self.STATE_SELECTING or event.button() != Qt.LeftButton:
             return
-        if event.button() == Qt.LeftButton:
-            gp = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
-            self.dragging = True
-            self.start_pt = gp
-            self.end_pt = gp
-            self.selection = QRect(self.start_pt, self.end_pt).normalized()
-            self.update()
+        gp = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
+        self.dragging = True
+        self.start_pt = self.end_pt = gp
+        self.selection = QRect(self.start_pt, self.end_pt).normalized()
+        self.update()
 
     def mouseMoveEvent(self, event):
         if self.state != self.STATE_SELECTING or not self.dragging:
@@ -371,52 +334,44 @@ class Overlay(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
-        if self.state != self.STATE_SELECTING:
+        if self.state != self.STATE_SELECTING or event.button() != Qt.LeftButton:
             return
-        if event.button() == Qt.LeftButton:
-            self.dragging = False
-            gp = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
-            self.end_pt = gp
-            self.selection = QRect(self.start_pt, self.end_pt).normalized()
-            self.update()
+        self.dragging = False
+        gp = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
+        self.end_pt = gp
+        self.selection = QRect(self.start_pt, self.end_pt).normalized()
+        self.update()
 
     # ---- Drawing ----
-    def paintEvent(self, event):
+    def paintEvent(self, _event):
         if self.state == self.STATE_IDLE:
             return
 
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # 1) Draw the frozen desktop (full virtual desktop)
+        # Draw frozen desktop or a black fallback
         if self._frozen_pm and not self._frozen_pm.isNull():
             p.drawPixmap(0, 0, self._frozen_pm)
         else:
-            # Fallback
             p.fillRect(self.rect(), QColor(0, 0, 0, 255))
 
-        # 2) Dim everything
-        shade = QColor(0, 0, 0, 100 if self.state == self.STATE_SELECTING else 150)
-        p.fillRect(self.rect(), shade)
+        # Dim everything
+        alpha = 100 if self.state == self.STATE_SELECTING else 150
+        p.fillRect(self.rect(), QColor(0, 0, 0, alpha))
 
-        # 3) If selecting, "unshade" the selection by repainting the frozen snapshot
+        # Unshade the selection during selection
         if self.state == self.STATE_SELECTING and not self.selection.isNull() and self._frozen_pm and not self._frozen_pm.isNull():
-            # Target rect in widget coords (we span the virtual desktop starting at (0,0))
             r_widget = QRect(self.mapFromGlobal(self.selection.topLeft()),
-                            self.mapFromGlobal(self.selection.bottomRight())).normalized()
+                             self.mapFromGlobal(self.selection.bottomRight())).normalized()
 
-            # Source rect in the frozen pixmap (convert global -> virtual-desktop-local)
             vg = QGuiApplication.primaryScreen().virtualGeometry()
             r_global = self.selection.normalized()
             src = QRect(r_global.topLeft() - vg.topLeft(), r_global.size()).normalized()
-
-            # Clamp source to pixmap bounds
             src = src.intersected(QRect(0, 0, self._frozen_pm.width(), self._frozen_pm.height()))
             if not src.isEmpty():
-                # Draw the original (undimmed) pixels back over the dim layer
                 p.drawPixmap(r_widget, self._frozen_pm, src)
 
-            # Border
             pen = QPen(Qt.white)
             pen.setWidth(2)
             pen.setStyle(Qt.DashLine)
@@ -428,12 +383,12 @@ class Overlay(QWidget):
         self.layoutFloatingWidgets()
 
     def layoutFloatingWidgets(self):
+        """Position instruction, waiting/result box, and preview intelligently."""
         try:
             pg = self._primary_geom()
             center_local = self.mapFromGlobal(pg.center())
             PW, PH = pg.width(), pg.height()
 
-            # --- Compute/remember a "status box" rect (either waiting or result) ---
             status_rect = None
 
             if self.waiting.isVisible():
@@ -445,42 +400,29 @@ class Overlay(QWidget):
                 y = center_local.y() - h // 2
                 status_rect = QRect(x, y, w, h)
                 self.waiting.setGeometry(status_rect)
-                # live-update cache so when we switch to result we reuse this spot
                 self._status_rect = status_rect
 
-            # If result is visible and we have a cached rect, use it.
             if self.result.isVisible():
-                if self._status_rect is not None:
-                    status_rect = QRect(self._status_rect)  # copy
-                    self.result.setGeometry(status_rect)
-                else:
-                    # Fallback: center a modest box if no cache exists
-                    pad = 16
-                    w = min(int(PW * 0.5), 600)
-                    h = min(int(PH * 0.3), 280)
-                    x = center_local.x() - w // 2
-                    y = center_local.y() - h // 2
-                    status_rect = QRect(x, y, w, h)
-                    self.result.setGeometry(status_rect)
-                    self._status_rect = status_rect
+                # reuse previous rect if known; else center a reasonable default
+                w = int(PW * 0.7)
+                h = int(PH * 0.4)
+                x = center_local.x() - w // 2
+                y = center_local.y() - h // 2
+                self._status_rect = QRect(x, y, w, h)
+                status_rect = QRect(self._status_rect)
+                self.result.setGeometry(status_rect)
 
-            # --- Position the preview relative to the status box (above or below) ---
             if self.preview.isVisible():
-                spacing = 16
-                top_margin = 60
-                bottom_margin = 40
-
+                spacing, top_margin, bottom_margin = 16, 60, 40
                 natural_max_w = int(PW * 0.5)
                 natural_max_h = int(PH * 0.5)
 
+                aspect = 1.6
                 if self._preview_pixmap:
                     src_w = max(1, self._preview_pixmap.width())
                     src_h = max(1, self._preview_pixmap.height())
                     aspect = src_w / src_h
-                else:
-                    aspect = 1.6
 
-                # If we have a status box (waiting or result), place preview above/below it.
                 if status_rect is not None:
                     wx, wy, ww, wh = status_rect.x(), status_rect.y(), status_rect.width(), status_rect.height()
                     avail_above_h = max(0, wy - top_margin - spacing)
@@ -488,12 +430,10 @@ class Overlay(QWidget):
                     place_above = avail_above_h >= 120
                     max_h = min(natural_max_h, (avail_above_h if place_above else avail_below_h))
                 else:
-                    # No status box: approximate placement above midline
                     place_above = True
                     max_h = natural_max_h
 
-                if max_h < 60:
-                    max_h = 120
+                max_h = max(max_h, 120)
                 max_w = min(natural_max_w, int(max_h * aspect))
 
                 if self._preview_pixmap:
@@ -505,48 +445,31 @@ class Overlay(QWidget):
 
                 px = center_local.x() - pw // 2
                 if status_rect is not None:
-                    if place_above:
-                        py = max(top_margin, status_rect.y() - spacing - ph)
-                    else:
-                        py = min(self.height() - bottom_margin - ph, status_rect.y() + status_rect.height() + spacing)
+                    py = (max(top_margin, status_rect.y() - spacing - ph)
+                          if place_above
+                          else min(self.height() - bottom_margin - ph, status_rect.y() + status_rect.height() + spacing))
                 else:
                     py = max(top_margin, center_local.y() - PH//4 - ph//2)
 
                 self.preview.setGeometry(px, py, pw, ph)
 
-            # If neither waiting nor result is visible but result should have a large box,
-            # keep your original big centered layout (rare with this flow).
-            if not self.waiting.isVisible() and not self.result.isVisible():
-                pass
-
         except Exception:
             pass
-        
+
     # ---- Capture & translate ----
     def _capture_and_translate(self):
-        if self.selection.isNull():
-            return
-
-        # Use the pre-frozen desktop so content doesn't move
-        if not self._frozen_pm or self._frozen_pm.isNull():
-            # Fallback: no frozen image; do nothing (or you could keep your old live-grab here)
+        if self.selection.isNull() or not self._frozen_pm or self._frozen_pm.isNull():
             return
 
         sel = self.selection.normalized()
         x, y, w, h = sel.x(), sel.y(), sel.width(), sel.height()
 
-        # Convert global coords to virtual-desktop-local coords
         vg = QGuiApplication.primaryScreen().virtualGeometry()
-        vx = x - vg.x()
-        vy = y - vg.y()
-
-        # Clamp to bounds just in case
-        vx = max(0, min(vx, self._frozen_pm.width()  - 1))
-        vy = max(0, min(vy, self._frozen_pm.height() - 1))
+        vx = max(0, min(x - vg.x(), self._frozen_pm.width()  - 1))
+        vy = max(0, min(y - vg.y(), self._frozen_pm.height() - 1))
         w  = max(1, min(w, self._frozen_pm.width()  - vx))
         h  = max(1, min(h, self._frozen_pm.height() - vy))
 
-        # Crop the frozen snapshot
         pm = self._frozen_pm.copy(vx, vy, w, h)
 
         self.state = self.STATE_WAITING
@@ -558,7 +481,6 @@ class Overlay(QWidget):
         self.layoutFloatingWidgets()
         self.update()
 
-        # Encode PNG from the cropped, frozen pixmap
         ba = QByteArray()
         buf = QBuffer(ba)
         buf.open(QIODevice.WriteOnly)
@@ -566,22 +488,23 @@ class Overlay(QWidget):
         buf.close()
         png_bytes = bytes(ba)
 
-        # Launch the worker (unchanged)
+        # Worker thread
         self._thread = QThread(self)
         self._worker = TranslatorWorker()
         self._worker.moveToThread(self._thread)
-        self._thread.started.connect(lambda: self._worker.run(png_bytes))
 
+        self._thread.started.connect(lambda: self._worker.run(png_bytes))
         self._worker.chunk.connect(self._on_worker_chunk)
         self._worker.done.connect(self._on_worker_done)
         self._worker.error.connect(self._on_worker_error)
 
+        # Clean up
         self._worker.done.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
-
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
+
 
 class TrayApp(QApplication):
     def __init__(self, argv):
@@ -590,17 +513,14 @@ class TrayApp(QApplication):
 
         # Tray
         self.tray = QSystemTrayIcon(self)
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        if icon.isNull():
-            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon)
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon) \
+               or self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon)
         self.tray.setIcon(icon)
 
         menu = QMenu()
-
         quit_action = QAction("Quit", self.tray)
         quit_action.triggered.connect(self.quit_app)
         menu.addAction(quit_action)
-
         self.tray.setContextMenu(menu)
 
         self.tray.activated.connect(self._on_tray_activated)
@@ -611,7 +531,7 @@ class TrayApp(QApplication):
         self.overlay = Overlay()
         self.overlay.requestClose.connect(self.on_overlay_closed)
 
-        # --- Register Ctrl+Alt+PrintScreen ---
+        # Register Ctrl+Alt+PrintScreen (fallback to Ctrl+Alt+F9)
         self._hotkey_filter = WinHotkeyFilter(self.trigger_selection)
         self.installNativeEventFilter(self._hotkey_filter)
 
@@ -619,25 +539,18 @@ class TrayApp(QApplication):
         if not ok:
             VK_F9 = 0x78
             ok = RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT, VK_F9)
-            if ok:
-                self.tray.setToolTip("Image → Portuguese (Ctrl+Alt+F9)")
-            else:
-                self.tray.setToolTip("Image → Portuguese (no hotkey registered)")
+            self.tray.setToolTip("Image → Portuguese (Ctrl+Alt+F9)" if ok else "Image → Portuguese (no hotkey registered)")
         else:
             self.tray.setToolTip("Image → Portuguese (Ctrl+Alt+PrtScr)")
 
         self.aboutToQuit.connect(self._cleanup_hotkey)
 
     def _on_tray_activated(self, reason):
-        # Trigger on left click or double click
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.trigger_selection()
 
     def _cleanup_hotkey(self):
         UnregisterHotKey(None, HOTKEY_ID)
-
-    def _hotkey_release(self, *_args, **_kwargs):
-        QTimer.singleShot(0, self.trigger_selection)
 
     def trigger_selection(self):
         if self.overlay.state == self.overlay.STATE_IDLE:

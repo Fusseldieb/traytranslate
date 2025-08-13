@@ -27,3 +27,5 @@ Or build it into a standalone `.exe` with:
 ```powershell
 pyinstaller --onefile --noconsole .\tray_translate_picker.py
 ```
+
+If you download the prebuilt release or run the standalone executable, make sure to have the `.env` **in the same directory**.
