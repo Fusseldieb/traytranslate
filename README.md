@@ -1,8 +1,8 @@
-# TrayTranslate
+![TrayTranslate](.\static\traytranslate.png)
 
 A simple tool that leverages the OpenAI API to translate text on the screen when a shortcut is pressed.
 
-The shortcut in this case is hardcoded as **Shift + Ctrl + PrtScr**.
+The shortcut in this case is hardcoded as **Shift + Ctrl + PrtScr**. The prompt, however, is customizeable and is in `prompt.md`.
 
 To use this app, first populate the `.env` file with your OpenAI API key. Refer to `.env.example` for a reference.
 
