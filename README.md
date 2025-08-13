@@ -6,7 +6,7 @@ The shortcut in this case is hardcoded as **Shift + Ctrl + PrtScr**. The prompt,
 
 # Setting everything up
 
-If you just want to run it, jump to section [running](#Running).
+If you just want to run it, jump to section [Running](#Running).
 
 To use this app, first install Python 3.11. Then, populate the `.env` file with your OpenAI API key. 
 Refer to `.env.example` for a reference.
